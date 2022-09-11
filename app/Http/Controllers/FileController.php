@@ -9,13 +9,18 @@ use Illuminate\Http\RedirectResponse;
 class FileController extends Controller
 {
     /**
+     * @var IScoreEmployee
+     */
+    private $uploadEmployeeService;
+
+    /**
      * @param IScoreEmployee $uploadEmployeeService
      */
     public function __construct(
-        private IScoreEmployee $uploadEmployeeService
+        IScoreEmployee $uploadEmployeeService
     )
     {
-
+        $this->uploadEmployeeService = $uploadEmployeeService;
     }
 
     /**
