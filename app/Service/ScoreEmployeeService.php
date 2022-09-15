@@ -38,74 +38,111 @@ class ScoreEmployeeService implements IScoreEmployee
     public function getScoreData(UploadedFile $file): array
     {
         $employeesData = Excel::toArray(new EmployeesImport, $file)[0];
-        $employeesAllScores = $this->getEmployeesAllScores($employeesData);
 
-        $checkedEmployeeEmail = null;
-        $result = [];
-        foreach ($employeesAllScores as $employee) {
-
-            $employeeEmail = $employee['first_employee_email'];
-
-            if ($checkedEmployeeEmail === $employeeEmail) {
-                continue;
-            }
-
-            $firstEmployeeMaxScore = collect($employeesAllScores)
-                ->where('first_employee_email', $employeeEmail)
-                ->sortByDesc('score')
-                ->first();
-
-            $secondEmployeeMaxScore = collect($result)
-                ->where('second_employee_email', $employeeEmail)
-                ->sortByDesc('score')
-                ->first();
-
-            if (!is_null($secondEmployeeMaxScore)) {
-
-                if ($employee['score'] > $secondEmployeeMaxScore['score']) {
-                    $result[] = $firstEmployeeMaxScore;
-                }
-
-            } else {
-                $result[] = $firstEmployeeMaxScore;
-            }
-
-            $checkedEmployeeEmail = $employeeEmail;
-        }
-
-        $result = collect($result)->sortByDesc('score');
-        $average = number_format($result->sum('score') / count($result), 2);
+        $higherScoreGroup = $this->getHigherScoreGroup($employeesData);
+        $average = collect($higherScoreGroup)->avg('score');
         $employeesCount = count($employeesData);
 
         return [
-            'result' => $result,
+            'result' => $higherScoreGroup,
             'averageText' => "In the case of {$employeesCount} employees the highest average match score is {$average}%"
         ];
     }
 
     /**
-     * Function to sum score 2 employees by type
+     * Function to get higher score group of employees
      *
-     * @param array $firstEmployee
-     * @param array $secondEmployee
-     * @return int
+     * @param array $employeesData
+     * @return array
      */
-    private function sumScore(array $firstEmployee, array $secondEmployee): int
+    private function getHigherScoreGroup(array $employeesData): array
     {
-        $score = 0;
-        if ($firstEmployee['division'] === $secondEmployee['division']) {
-            $score += self::PERCENT_BY_DIVISION;
+        $groupedCombinations = $this->getUniqueGroupedCombinations($employeesData);
+
+        $maxTotalScore = 0;
+        $maxTotalScoreIndex = 0;
+        foreach ($groupedCombinations as $key => $scoreData) {
+
+            $totalScore = collect($scoreData)->sum('score');
+
+            if ($totalScore > $maxTotalScore) {
+                $maxTotalScore = $totalScore;
+
+                $maxTotalScoreIndex = $key;
+            }
         }
 
-        if (abs($firstEmployee['age'] - $secondEmployee['age']) <= self::PERCENT_BY_AGE_DIFFERENCE) {
-            $score += self::PERCENT_BY_AGE;
+        return $groupedCombinations[$maxTotalScoreIndex];
+    }
+
+    /**
+     * Function to get unique combination data of employees
+     *
+     * @param array $employeesData
+     * @return array
+     */
+    private function getUniqueGroupedCombinations(array $employeesData): array
+    {
+        $employeesCombinationScores = $this->getEmployeesAllScores($employeesData);
+
+        $dataCount = count($employeesData);
+        $inGroupItemsCount = $dataCount - 3;
+        $needItemCountInGroup = ($dataCount - 2) / 2 * $inGroupItemsCount;
+        $checkCount = $inGroupItemsCount * ($dataCount - 1);
+
+        $result = $alsoCheckedMainCombination = $groupedCombination = [];
+        $addedItemCountInGroup = 0;
+
+        for ($i = 0; $i < $checkCount; $i++) {
+
+            foreach ($employeesCombinationScores as $scoreData) {
+
+                $combination = $scoreData['first_employee_email'] . '/' . $scoreData['second_employee_email'];
+
+                if (in_array($combination, $alsoCheckedMainCombination)) {
+                    continue;
+                }
+
+                if (empty($result[$i])) {
+
+                    $result[$i][$combination] = $scoreData;
+
+                    continue;
+                }
+
+                if (count($result[$i]) <= $dataCount / 2) {
+
+                    $firstCompare = reset($result[$i]);
+                    $firstCompareCombination = $firstCompare['first_employee_email'] . '/' . $firstCompare['second_employee_email'];
+
+                    if (!$this->checkInGroupExistEmployees($result[$i], $scoreData) && !in_array($combination, $groupedCombination[$firstCompareCombination] ?? [])) {
+
+                        $result[$i][$combination] = $scoreData;
+
+                        // ----------
+
+                        if (empty($groupedCombination[$firstCompareCombination])) {
+                            $groupedCombination[$firstCompareCombination] = [];
+                        }
+
+                        $groupedCombination[$firstCompareCombination][] = $combination;
+
+                        $addedItemCountInGroup++;
+
+                        // ----------
+
+                        if ($addedItemCountInGroup === $needItemCountInGroup) {
+
+                            $addedItemCountInGroup = 0;
+
+                            $alsoCheckedMainCombination[] = $firstCompareCombination;
+                        }
+                    }
+                }
+            }
         }
 
-        if ($firstEmployee['timezone'] === $secondEmployee['timezone']) {
-            $score += self::PERCENT_BY_TIMEZONE;
-        }
-
-        return $score;
+        return $result;
     }
 
     /**
@@ -136,5 +173,51 @@ class ScoreEmployeeService implements IScoreEmployee
         }
 
         return $employeesAllScores;
+    }
+
+    /**
+     * Function to check employees exists in current group
+     *
+     * @param array $groupEmployees
+     * @param array $checkEmployee
+     * @return bool
+     */
+    private function checkInGroupExistEmployees(array $groupEmployees, array $checkEmployee): bool
+    {
+        $allEmails = [];
+        foreach ($groupEmployees as $employee) {
+            array_push($allEmails, $employee['first_employee_email'], $employee['second_employee_email']);
+        }
+
+        if (in_array($checkEmployee['first_employee_email'], $allEmails) || in_array($checkEmployee['second_employee_email'], $allEmails)) {
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * Function to sum score 2 employees by type
+     *
+     * @param array $firstEmployee
+     * @param array $secondEmployee
+     * @return int
+     */
+    private function sumScore(array $firstEmployee, array $secondEmployee): int
+    {
+        $score = 0;
+        if ($firstEmployee['division'] === $secondEmployee['division']) {
+            $score += self::PERCENT_BY_DIVISION;
+        }
+
+        if (abs($firstEmployee['age'] - $secondEmployee['age']) <= self::PERCENT_BY_AGE_DIFFERENCE) {
+            $score += self::PERCENT_BY_AGE;
+        }
+
+        if ($firstEmployee['timezone'] === $secondEmployee['timezone']) {
+            $score += self::PERCENT_BY_TIMEZONE;
+        }
+
+        return $score;
     }
 }
